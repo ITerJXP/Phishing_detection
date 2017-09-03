@@ -6,7 +6,7 @@ reload(sys)
 sys.setdefaultencoding("utf-8")
 from tld import get_tld
 from urlparse import urlparse
-
+import whois
 
 class URL:
     def __init__(self, url):
@@ -111,32 +111,28 @@ class URL:
         num_params = len(url.query.split('&'))      # query个数
         return length_querystr, num_params
 
-    
-    '''
-        Host & Domain
-    '''
-
-
-
-    
-
-    '''
-        Security
-    '''
-
-    
-    '''
-        Page Content
-    '''
-
-
-
-class WHOIS:
+                                   
+class CONTENT:
     def __init__(self, url):
         self.url = url
+ 
+ 
+class WHOIS:
+    def __init__(self, url, whois_info):
+        self.url = url
+        self.whois = whois_info
+    
+    def age_of_domain():
+        creation_date = self.whois['creation_date']
 
 
 if __name__ == '__main__':
     for url in sys.stdin:
         url = url.lower()
-        
+        whois_info = whois.whois(url)
+        # 实例化
+        ob_url = ULR(url)
+        ob_content = CONTENT(url)
+        ob_whois = WHOIS(url, whois_info)
+        # 生成特征
+
