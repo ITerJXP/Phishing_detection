@@ -1,53 +1,114 @@
 # -*- coding: utf-8 -*-
 
 import sys
-reload(sys)
-from tld import get_tld
-from urlparse import urlparse
-import whois
 import re
-import datetime
-from get_web_content import get_html, main
-sys.path.append('/Users/JasonJay/programming/workspace/Python_anaconda2.4/Phishing_Detction');
-from get_web_content import HtmlDom;
+from urlparse import urlparse
+from n_grams import make_str, train_grams, unigram, n_grams
+from get_web_content import get_content
+from get_whois import _whois
+from conf import NORMAL_URL, PHISH_URL, CACHE_FILE, PHISH_FEATURES
+import urlparse
+import Levenshtein
+from tld import get_tld
 import urllib2
+from multiprocessing import Pool
+import multiprocessing
+from decimal import getcontext
+
+#############################################################################
+#                           特征提取流程解释                                  #
+#   1. 获取 URL 各部分内容，包括六大部分                                        #
+#       （Scheme, Hostname, Domain, Path, Param, Query）                    #
+#   2. 创建 URL 类，实现各种特征方法                                           #
+#   3. 所有bool类型的特征：有为1；无为0                                        #
+#############################################################################
+
+# 全局变量
+# sys.path.append('/Users/JasonJay/programming/workspace/Python_anaconda2.4/Phishing_Detction')
+target_list = ['adobe', 'alibaba', 'amazon', 'apple', 'baidu', 'dropbox', 'ebay',
+               'tencent', 'google', 'qq', 'microsoft', 'outlook', 'facebook', 'paypal', 'yahoo',
+               'webscr', 'secure', 'banking', 'ebayisapi', 'account', 'confirm','login', 'signin',
+               'free', 'lucky', 'bonus index', 'includes', 'content', 'images', 'admin', 'file doc',
+               'account', 'update', 'confirm', 'verify', 'secur', 'notif', 'log', 'click', 'inconvenien',
+               'urgent', 'alert']
+# getcontext().prec = 3
+
+
+def get_url_parts(url):
+    '''
+        提取url各部分
+    :param url: 完整url
+    :return: 六大部分（Scheme, Hostname, Domain, Path, Param, Query）
+    '''
+    result = urlparse.urlparse(url)
+    scheme = result.scheme
+    hostname = result.netloc
+    try:
+        domain = get_tld(url)
+    except Exception, e:
+        domain = hostname
+    path = result.path
+    param = result.params
+    query = result.query
+    return scheme, hostname, domain, path, param, query
+
+
+def train_n_grams(trainset):
+    '''
+        训练词袋模型
+    :param trainset: 指定结构的url集合
+    :return: 四种n-gram
+    '''
+    print >> sys.stderr, 'training is start...'
+    _str_ = make_str(trainset)
+    uni_delta_clt = train_grams(_str_, 1)
+    bi_delta_clt = train_grams(_str_, 2)
+    tri_delta_clt = train_grams(_str_, 3)
+    # qua_delta_clt = train_grams(_str_, 4)
+    return uni_delta_clt, bi_delta_clt, tri_delta_clt
+
 
 class URL:
     def __init__(self, url):
         self.url = url
         self.contains_dots = '.'
         self.contains_at = '@'
-        self.sensitive_term_url = ['webscr', 'secure', 'banking', 'ebayisapi', 'account', 'confirm', \
-                                    'login', 'signin', 'paypal', 'free', 'lucky', 'bonus index', 'includes', \
-                                     'content', 'images', 'admin', 'file doc', 'account', 'update', 'confirm', \
-                                    'verify', 'secur', 'notif', 'log', 'click', 'inconvenien', 'urgent', 'alert']
         self.hyphen = '-'
         self.slashes_url = '/'
         self.slash_reidr = '//'
-      	self.token = '[?_.=&-]'
-
-    '''
-        URL & Lexical Features
-    '''    
+        self.token = '[?_.=&-/]'
 
     def url_self_features(self):
-        # url长度
-        length_url = len(self.url)  
-        # 包括.数
-        num_dots_url = self.url.count(self.contains_dots)
-        # 包括/数
-        num_slashes_url = self.url.count(self.slashes_url)
-        # 是否包括@
-        contains_at = self.url.find(self.contains_at) != -1
-        if contains_at == True:at = 1
-        else:at = 0
-        # 是否包括-
-        hyphen_url = self.url.find(self.hyphen) != -1
-        if hyphen_url == True:url = 1
-        else:url = 0
-        return length_url, num_dots_url, num_slashes_url, at, url
+        '''
+            url基本特征
+        :return: URL总长度，'.'数，'/'数，是否有'@'，是否有'-'，是否有'//'
+        '''
+        length_url = len(self.url)  # url长度
+        num_dots_url = self.url.count(self.contains_dots)   # 包括'.'数
+        num_slashes_url = self.url.count(self.slashes_url)  # 包括'/'数
+        contains_at = self.url.find(self.contains_at) != -1 # 是否包括'@''
+        if contains_at == True:is_at = 1
+        else:is_at = 0
+        hyphen_url = self.url.find(self.hyphen) != -1   # 是否包括 '-'
+        if hyphen_url == True:is_hyphen = 1
+        else:is_hyphen = 0
+        contains_slash_redir = self.url.find(self.slash_reidr) != -1  # 是否包括'//'
+        if contains_slash_redir == True:is_slash_redir = 1
+        else:is_slash_redir = 0
+        return length_url, num_dots_url, num_slashes_url, is_at, is_hyphen, is_slash_redir
 
-    def ip_exist_one(self):      # 是否包括ip地址
+    def bag_of_word(self, this_delta, pre_delta, N):
+        """
+            bag_of_word模型
+        :param this_delta: 当前状态为 M 时的deltaz值
+        :param pre_delta: 当前状态为 m-1 时的deltaz值
+        :param N: n-gram
+        :return: 相似值
+        """
+        sim = n_grams(self.url, this_delta_clt=this_delta, pre_delta_clt=pre_delta, n_gram=N)
+        return sim
+
+    def ip_exist_ip(self):      # 是否包括ip地址
         compile_rule = re.compile(r'\d+[\\.]\d+[\\.]\d+[\\.]\d+')
         match_ip = re.findall(compile_rule, self.url)       
         if match_ip:
@@ -55,150 +116,396 @@ class URL:
         else:
             return 0
 
-    def domain_token(self):
-        import tld
-        try:
-            domain = get_tld(self.url)
-        except (tld.exceptions.TldBadUrl,tld.exceptions.TldDomainNotFound),e:
-            #raise tld.exceptions.TldBadUrl(self.url)
-            return 0,0,0
+    def has_sensitive_terms(self):      # 是否包括敏感词汇
+        bool_list = [i in self.url for i in target_list]
+        if True in bool_list:
+            return 1
         else:
-            domain_token = [x for x in re.split(self.token, domain)]
-            num_domain_tokens = len(domain_token)       # domain_token数
-            longest_domain_tokens = max(len(i) for i in domain_token)      # domain token最大长度
-        
-            num_token = 0
-            for i in domain_token:  
-                num_token += len(i)
-            average_domain_tokens = float(num_token) / num_domain_tokens       # domain tokens平均长度
-            return num_domain_tokens, longest_domain_tokens, average_domain_tokens
-
-    def path(self):
-        num_path_tokens = 0
-        longest_path_tokens = 0
-        average_path_tokens = 0.0
-
-        url = urlparse(self.url)
-        path = url.path.replace('/', '')
-        num_subdirectory = len(path.split('/'))     # path数
-    
-        if len(path) != 0:
-            path_token = [x for x in re.split(self.token, path)]
-            num_path_tokens = len(path_token)       # path_token数
-            longest_path_tokens = max(len(i) for i in path_token)      # path token最大长度
-            num_token = 0
-            for i in path_token: 
-                num_token += len(i)
-            average_path_tokens = float(num_token) / num_path_tokens       # domain tokens平均长度
-        return num_subdirectory, num_path_tokens, longest_path_tokens,  average_path_tokens
+            return 0
 
     def num_non_alpha_url(self):        # 非字母个数
         num_non_alpha = 0
         for s in self.url:
             if not s.isalpha():
                 num_non_alpha += 1
-        return num_non_alpha 
+        return num_non_alpha
 
-    def has_sensitive_terms(self):      # 是否包括敏感词汇
-        bool_list = [i in self.url for i in self.sensitive_term_url]
-        if True in bool_list:           
+    def tokens(self):    # URL的token相关计算
+        '''
+        :return: 最长token, 平均token
+        '''
+        url_token = [x for x in re.split(self.token, self.url)]
+        num_url_tokens = len(url_token)  # url_token数
+        longest_url_tokens = max(len(i) for i in url_token)  # domain token最大长度
+        length_token = 0
+        for i in url_token:
+            length_token += len(i)
+        average_url_tokens = float(length_token) / num_url_tokens  # domain tokens平均长度
+
+        def same_target():
+            for token in url_token:
+                for target in target_list:
+                    if 0 <= Levenshtein.distance(token, target) < 3:
+                        return 1
+            return 0
+        has_sametarget = same_target()
+        return longest_url_tokens, average_url_tokens, has_sametarget
+
+
+def type_scheme(scheme):
+    '''
+        https or http
+    :param scheme
+    :return: https(1) or http(0)
+    '''
+    if scheme == 'https':
+        return 1
+    else:
+        return 0
+
+
+class Hostname:
+    def __init__(self, hostname):
+        self.hostname = hostname
+        self.token = '[?_.=&-/]'
+
+    def length(self):
+        length_hn = len(self.hostname)  # url长度
+        return length_hn
+
+    def tokens(self):
+        '''
+        :return: 最长token, 平均token
+        '''
+        hn_token = [x for x in re.split(self.token, self.hostname)]
+        num_url_tokens = len(hn_token)  # url_token数
+        longest_url_tokens = max(len(i) for i in hn_token)  # domain token最大长度
+        length_token = 0
+        for i in hn_token:
+            length_token += len(i)
+        average_url_tokens = float(length_token) / num_url_tokens  # domain tokens平均长度
+        return longest_url_tokens, average_url_tokens
+
+    def bag_of_word(self, this_delta, pre_delta, N):
+        if this_delta == pre_delta:
+            sim = unigram(self.hostname, this_delta)
+        else:
+            sim = n_grams(self.hostname, this_delta_clt=this_delta, pre_delta_clt=pre_delta, n_gram=N)
+        return sim
+
+    def num_chars_after_target(self):   # target后的字符数
+        num_chars = -1
+        for target in target_list:
+            if target in self.hostname:
+                after = self.hostname.split(target)[-1]
+                num_chars = num(after)
+                break
+        return num_chars
+
+
+class Domain:
+    def __init__(self, domain):
+        self.domain = domain
+
+    def length(self):
+        length_domain = len(self.domain)  # url长度
+        return length_domain
+
+    def tokens(self):  # token数
+        token_list = self.domain.split('.')
+        num_token = len(token_list)
+        longest_token = max(len(i) for i in token_list)
+        length_token = 0
+        for i in token_list:
+            length_token += len(i)
+        ave_token = float(length_token) / len(token_list)  # domain tokens平均长度
+        return num_token, longest_token, ave_token
+
+    def bag_of_word(self, this_delta, pre_delta, N):
+        sim = n_grams(self.domain, this_delta_clt=this_delta, pre_delta_clt=pre_delta, n_gram=N)
+        return sim
+
+    def num_hyphens(self):  # '-'数
+        num_hy = 0
+        for i in self.domain:
+            if i == '-':
+                num_hy += 1
+        return num_hy
+
+    def subdomain(self):
+        if len(self.domain.strip().split('.')) > 2:
             return 1
         else:
             return 0
 
-    '''
-    def has_port(self):     # 获取url端口
-        url = urlparse(self.url)
-        return url.port  
-    '''
 
-    def query(self):
-        url = urlparse(self.url)
-        length_querystr = len(url.query)        # query长度  
-        num_params = len(url.query.split('&'))      # query个数
-        return length_querystr, num_params
+class Path:
+    def __init__(self, path):
+        self.path = path
 
+    def tokens(self):
+        token_list = self.path.split('/')
+        token_count = len(target_list) - 1
+        token_length = 0
+        for token in token_list[1:]:
+            token_length += len(token)
+        ave_token = float(token_length)/token_count
+        longest_token = max(len(i) for i in token_list)
+        return token_count, ave_token, longest_token
 
-class CONTENT:
-    def __init__(self, url):
-        self.url = url
-        self.dom = main(url) 
-
-    def get_input(self):
-        n_input, n_text, n_password = self.dom.get_input()
-        return n_input, n_text, n_password      # 输入框数； 文本输入框数； 密码输入框数
-
-    def get_href(self):
-        same_num = 0
-        href_list, href_num = self.dom.get_href()
-        for href in href_list:
-            if href == self.url:
-                same_num += 1
-        return href_num, same_num       # 一个网页中包括总链接数； 网页中链接数据和url相同数
-
-
-class WHOIS:
-    def __init__(self, url, whois_dic):
-        self.url = url
-        self.whois_dic = whois_info
-    
-    def age_of_domain(self):        # 判断domain age是否小于60天
-        creation_date = self.whois_dic['creation_date']
-        if creation_data != None:
-            cur = datetime.datetime.now()
-            if cur - datetime.timedelta(days=60) > creation_date:
-                return 1
-            else:
-                return 0
+    def bag_of_word(self, this_delta, pre_delta, N):
+        if this_delta == pre_delta:
+            sim = unigram(self.path, this_delta)
         else:
-	    	return 0
+            sim = n_grams(self.path, this_delta_clt=this_delta, pre_delta_clt=pre_delta, n_gram=N)
+        return sim
 
+    def digit_letter_ratio(self):
+        num_digit = 0
+        num_letter = 0
+        for i in self.path:
+            if i.isdigit():
+                num_digit += 1
+            elif i.isalpha():
+                num_letter += 1
+        if num_letter == 0:
+            ratio = -1
+        else:
+            ratio = float(num_digit)/num_letter
+        return ratio
+
+    def has_target(self):
+        for target in target_list:
+            if target in self.path:
+                return 1
+        return 0
+
+
+class Query:
+    # 包括params
+    def __init__(self, query):
+        self.query = query
+
+    def self_query(self):
+        length = len(self.query)
+        token_list = self.query.split('&')
+        num_params = len(token_list)
+        query_list = []
+        for item in token_list:
+            if '=' in item:
+                query_value = item.split('=')[1]
+                query_list.append(query_value)
+            else:
+                query_list.append(item)
+        longest_query = max(len(i) for i in query_list)
+        return length, num_params, longest_query
+
+    def bag_of_word(self, this_delta, pre_delta, N):
+        sim = n_grams(self.query, this_delta_clt=this_delta, pre_delta_clt=pre_delta, n_gram=N)
+        return sim
+
+
+def get_alexa_rank(url):
+    try:
+        data = urllib2.urlopen('http://data.alexa.com/data?cli=10&dat=snbamz&url=%s' % (url)).read()
+        reach_rank = re.findall("REACH[^\d]*(\d+)", data)
+        if reach_rank:
+            reach_rank = reach_rank[0]
+        else:
+            reach_rank = -1
+        popularity_rank = re.findall("POPULARITY[^\d]*(\d+)", data)
+        if popularity_rank:
+            popularity_rank = popularity_rank[0]
+        else:
+            popularity_rank = -1
+        return int(popularity_rank), int(reach_rank)
+    except (KeyboardInterrupt, SystemExit):
+        raise
+    except:
+        return None
+
+
+def load_data():
+    # 载入数据
+    benign_list = []
+    f = open(NORMAL_URL)
+    for line in f.readlines():
+        scheme, hostname, domain, path, param, query = get_url_parts(line.strip())
+        benign_list.append(domain)
+    f.close()
+    return benign_list
+
+
+#############################################################################
+    #   特征提取函数
+#############################################################################
+def get_features_url(_url):  # 解析 URl
+    url = URL(_url)
+    length_url, num_dots_url, num_slashes_url, is_at_url, is_hyphen_url, is_slash_redir_url = url.url_self_features()
+    # bigram_url = url.bag_of_word(bi_delta_clt, uni_delta_clt, 2)
+    # trigram_url = url.bag_of_word(tri_delta_clt, bi_delta_clt, 3)
+    # quadgram_url = url.bag_of_word(qua_delta_clt, tri_delta_clt, 4)
+    contains_ip_url = url.ip_exist_ip()
+    sensitive_term_url = url.has_sensitive_terms()
+    num_non_alpha_url = url.num_non_alpha_url()
+    longest_token_url, average_token_url, same_target_url = url.tokens()
+    return length_url, num_dots_url, num_slashes_url, is_at_url, is_hyphen_url, is_slash_redir_url, \
+           contains_ip_url, sensitive_term_url, num_non_alpha_url, \
+           longest_token_url, average_token_url, same_target_url
+
+
+def get_features_scheme(_Scheme):  # 解析 Scheme
+    t_scheme = type_scheme(_Scheme)
+    return t_scheme
+
+'''
+def get_featrues_hn():  # 解析 Hostname
+    hostname = Hostname(_Hostname)
+    length_hn = hostname.length()
+    longest_url_hn, average_url_hn = hostname.tokens()
+    unigram_hn = hostname.bag_of_word(uni_delta_clt, uni_delta_clt)
+    bigram_hn = hostname.bag_of_word(bi_delta_clt, uni_delta_clt, 2)
+    trigram_hn = hostname.bag_of_word(tri_delta_clt, bi_delta_clt, 3)
+    quadgram_hn = hostname.bag_of_word(qua_delta_clt, tri_delta_clt, 4)
+    num_chars_afterT_hn = hostname.num_chars_after_target()
+    return length_hn, longest_url_hn, average_url_hn, unigram_hn, bigram_hn, trigram_hn, quadgram_hn, num_chars_afterT_hn
+'''
+
+
+def get_features_domain(_Domain, uni_delta_clt, bi_delta_clt, tri_delta_clt):  # 解析 Domain
+    domain = Domain(_Domain)
+    length_domain = domain.length()
+    num_token_domain, longest_token_domain, ave_token_domain = domain.tokens()
+    bigram_domain = domain.bag_of_word(bi_delta_clt, uni_delta_clt, 2)
+    trigram_domain = domain.bag_of_word(tri_delta_clt, bi_delta_clt, 3)
+    num_hyphen_domain = domain.num_hyphens()
+    subdomain = domain.subdomain()
+    return length_domain, num_token_domain, longest_token_domain, ave_token_domain, bigram_domain, \
+           trigram_domain, num_hyphen_domain, subdomain
+
+
+def get_features_path(_Path):  # 解析 Path
+    path = Path(_Path)
+    if _Path == '':
+        num_token_path, ave_token_path, longest_token_path, digit_letter_ratio_path, has_target_path = 0, 0, 0, 0, 0
+    else:
+        num_token_path, ave_token_path, longest_token_path = path.tokens()
+        # unigram_path = path.bag_of_word(uni_delta_clt, uni_delta_clt, 1)
+        # bigram_path = path.bag_of_word(bi_delta_clt, uni_delta_clt, 2)
+        # trigram_path = path.bag_of_word(tri_delta_clt, bi_delta_clt, 3)
+        # quadgram_path = path.bag_of_word(qua_delta_clt, tri_delta_clt, 4)
+        digit_letter_ratio_path = path.digit_letter_ratio()
+        has_target_path = path.has_target()
+    return num_token_path, ave_token_path, longest_token_path, \
+           digit_letter_ratio_path, has_target_path  # unigram_path, bigram_path, trigram_path, quadgram_path
+
+
+def get_features_query(_Query):  # 解析 Query
+    query = Query(_Query)
+    if _Query == '':
+        length_query, num_querys, longest_query = 0, 0, 0
+    else:
+        length_query, num_querys, longest_query = query.self_query()
+        # trigram_query = query.bag_of_word(tri_delta_clt, bi_delta_clt, 3)
+        # quadgram_query = query.bag_of_word(qua_delta_clt, tri_delta_clt, 4)
+    return length_query, num_querys, longest_query
+
+
+def feature_extract(url, uni_delta_clt, bi_delta_clt, tri_delta_clt):
+    print >> sys.stderr, 'Features extraction is starting...'
+    # print >> sys.stderr, 'Process {} start ...'.format(multiprocessing.current_process())
+
+    #############################################################################
+    #   特征提取过程
+    #############################################################################
+
+    url = url.strip()
+    _url = url.lower()
+    _Scheme, _Hostname, _Domain, _Path, _Params, _Query = get_url_parts(_url)
+
+    length_url, num_dots_url, num_slashes_url, is_at_url, is_hyphen_url, is_slash_redir_url, \
+    contains_ip_url, sensitive_term_url, num_non_alpha_url, \
+    longest_token_url, average_token_url, same_target_url = get_features_url(url)
+
+    t_scheme = get_features_scheme(_Scheme)
+
+    length_domain, num_token_domain, longest_token_domain, ave_token_domain, bigram_domain, trigram_domain, \
+    num_hyphen_domain, subdomain = get_features_domain(_Domain, uni_delta_clt, bi_delta_clt, tri_delta_clt)
+
+    num_token_path, ave_token_path, longest_token_path, digit_letter_ratio_path, has_target_path = get_features_path(_Path)
+
+    length_query, num_querys, longest_query = get_features_query(_Query)
+
+    is_time = _whois(url)
+
+    # URL's rank
+    data = get_alexa_rank(url)
+    if data:
+        popularity_rank, reach_rank = data
+    else:
+        popularity_rank, reach_rank = 0, 0
+    gap = max(popularity_rank, reach_rank) - min(popularity_rank, reach_rank)   # 权值转换
+    if popularity_rank != 0 and reach_rank != 0:
+        if gap == 0:rank_value = 100001
+        elif gap < 100000:rank_value = float(100000 / gap)
+        else:rank_value = -1
+    else:rank_value = 0
+
+    # webpage content
+    num_input, is_input_pwd, is_favicon = get_content(url)
+
+    #############################################################################
+    #  写入文件
+    #############################################################################
+    print '{} {} {} {} {} {} {} {} {} {} {} {} {} {} {} {} {} {}' \
+        ' {} {} {} {} {} {} {} {} {} {} {} {} {} {} {} {} {}'\
+        .format(url, length_url, num_dots_url, num_slashes_url, is_at_url, is_hyphen_url, is_slash_redir_url,
+                    contains_ip_url, sensitive_term_url, num_non_alpha_url,
+                    longest_token_url, average_token_url, same_target_url,
+                    t_scheme,
+                    length_domain, num_token_domain, longest_token_domain, ave_token_domain,
+                    bigram_domain, trigram_domain,
+                    num_hyphen_domain, subdomain,
+                    num_token_path, ave_token_path, longest_token_path,
+                    digit_letter_ratio_path, has_target_path,
+                    length_query, num_querys, longest_query,
+                    is_time, rank_value,
+                    num_input, is_input_pwd, is_favicon)
+
+
+def multi_feature_extract():
+    # 训练bag_of_words
+    uni_delta_clt, bi_delta_clt, tri_delta_clt = train_n_grams(load_data())
+    print >> sys.stderr, 'training has finished!'
+    print >> sys.stderr, 'Multi process is starting ...'
+    p = Pool(processes=4)
+    for url in sys.stdin:
+        p.apply_async(feature_extract, args=(url, uni_delta_clt, bi_delta_clt, tri_delta_clt, ))
+    print >> sys.stderr, 'Done，main thread quit ...'
+
+
+def single_func():  # 单进程
+    import signal
+
+    def handler(signum, frame):
+        raise AssertionError
+
+    # 训练bag_of_words
+    uni_delta_clt, bi_delta_clt, tri_delta_clt = train_n_grams(load_data())
+    print >> sys.stderr, 'training has finished!'
+    count = 0
+    for url in sys.stdin:
+        count += 1
+        try:
+            signal.signal(signal.SIGALRM, handler)
+            signal.alarm(20)
+            feature_extract(url, uni_delta_clt, bi_delta_clt, tri_delta_clt)  # 特征提取，写入特征文件
+            print >> sys.stderr, 'no.%d: %s    has been extracted all features...' % (count, url)
+        except AssertionError:
+            print >> sys.stderr, 'no.%d: %s    has a problem...' % (count, url)
+            continue
 
 
 if __name__ == '__main__':
-    for url in sys.stdin:
-        url = url.lower()
-        
-		# url
-        ob_url = URL(url)
-        length_url, num_dots_url, num_slashes_url, contains_at, hyphen_url = ob_url.url_self_features()
-        ip_status = ob_url.ip_exist_one()
-        num_domain_tokens, longest_domain_tokens, average_domain_tokens = ob_url.domain_token()
-        num_subdirectory, num_path_tokens, longest_path_tokens, average_path_tokens = ob_url.path()
-        num_non_alpha = ob_url.num_non_alpha_url()
-        sens_status = ob_url.has_sensitive_terms()
-        length_querystr, num_params = ob_url.query()
-        print '{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}'.format(url.strip(), length_url, num_dots_url, num_slashes_url, contains_at, hyphen_url, ip_status, num_domain_tokens, longest_domain_tokens, average_domain_tokens,num_subdirectory, num_path_tokens, longest_path_tokens, average_path_tokens,num_non_alpha, sens_status, length_querystr, num_params)
-       	'''
-        # content
-        import socket
-        import httplib
-        try:
-            ob_content = CONTENT(url)
-        except (urllib2.HTTPError, urllib2.URLError, httplib.BadStatusLine, socket.error),e:
-            print '{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}'.format(url.strip(), length_url, num_dots_url, num_slashes_url, contains_at, hyphen_url, ip_status, num_domain_tokens, longest_domain_tokens, average_domain_tokens,num_subdirectory, num_path_tokens, longest_path_tokens, average_path_tokens,num_non_alpha, sens_status, length_querystr, num_params, 0, 0, 0, 0, 0)
-        else:
-            _input, n_text, n_password = ob_content.get_input()
-            href_num, same_num = ob_content.get_href()
-            print '{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}'.format(url.strip(), length_url, num_dots_url, num_slashes_url, contains_at, hyphen_url,ip_status, num_domain_tokens, longest_domain_tokens, average_domain_tokens, num_subdirectory, num_path_tokens, longest_path_tokens, average_path_tokens,num_non_alpha, sens_status, length_querystr, num_params, _input, n_text, n_password, href_num, same_num)
-        '''
-        # whois
-        '''
-        try:
-        	whois_info = whois.query(get_tld(url))
-	    	ob_whois = WHOIS(url, whois_info.__dict__)
-        	age_status = ob_whois.age_of_domain()
-
-        	print '{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}' \
-              '\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}'\
-            .format(url, length_url, num_dots_url, num_slashes_url, contains_at, hyphen_url,
-                    ip_status, num_domain_tokens, longest_domain_tokens, average_domain_tokens,
-                    num_subdirectory, num_path_tokens, longest_path_tokens, average_path_tokens,
-                    num_non_alpha, sens_status, length_querystr, num_params,_input, n_text, n_password,
-                    href_num, same_num, age_status)
-        except Exception, e:
-        	pass    	             
-        '''
-
-
-
+    single_func()
+    # multi_feature_extract()
