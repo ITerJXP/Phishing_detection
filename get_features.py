@@ -206,6 +206,9 @@ class Hostname:
 class Domain:
     def __init__(self, domain):
         self.domain = domain
+        self.contains_dots = '.'
+        self.contains_at = '@'
+        self.contains_hyphen = '-'
 
     def length(self):
         length_domain = len(self.domain)  # url长度
@@ -225,12 +228,22 @@ class Domain:
         sim = n_grams(self.domain, this_delta_clt=this_delta, pre_delta_clt=pre_delta, n_gram=N)
         return sim
 
-    def num_hyphens(self):  # '-'数
-        num_hy = 0
+    def domain_characters(self):
+        hyphen_domain = self.domain.find(self.contains_hyphen) != -1
+        if hyphen_domain == True:hyphen_domain = 1
+        else:hyphen_domain = 0
+        at_domain = self.domain.find(self.contains_at) != -1
+        if at_domain == True:at_domain = 1
+        else:at_domain = 0
+        dots_domain = self.domain.find(self.contains_dots) != -1
+        if dots_domain == True:dots_domain = 1
+        else: dots_domain = 0
+
+        num_hyphen = 0  # '-'数
         for i in self.domain:
             if i == '-':
-                num_hy += 1
-        return num_hy
+                num_hyphen += 1
+        return hyphen_domain, num_hyphen, at_domain, dots_domain
 
     def subdomain(self):
         if len(self.domain.strip().split('.')) > 2:
@@ -244,14 +257,15 @@ class Path:
         self.path = path
 
     def tokens(self):
+        len_path = len(self.path)
         token_list = self.path.split('/')
         token_count = len(target_list) - 1
         token_length = 0
         for token in token_list[1:]:
             token_length += len(token)
-        ave_token = float(token_length)/token_count
+        ave_token = float(token_length)/len(token_list)
         longest_token = max(len(i) for i in token_list)
-        return token_count, ave_token, longest_token
+        return len_path, token_count, ave_token, longest_token
 
     def bag_of_word(self, this_delta, pre_delta, N):
         if this_delta == pre_delta:
@@ -285,6 +299,9 @@ class Query:
     # 包括params
     def __init__(self, query):
         self.query = query
+        self.contains_dots = '.'
+        self.contains_at = '@'
+        self.contains_hyphen = '-'
 
     def self_query(self):
         length = len(self.query)
@@ -303,6 +320,18 @@ class Query:
     def bag_of_word(self, this_delta, pre_delta, N):
         sim = n_grams(self.query, this_delta_clt=this_delta, pre_delta_clt=pre_delta, n_gram=N)
         return sim
+
+    def query_characters(self):
+        hyphen_query = self.query.find(self.contains_hyphen) != -1
+        if hyphen_query == True:hyphen_query = 1
+        else:hyphen_query = 0
+        at_query = self.query.find(self.contains_at) != -1
+        if at_query == True:at_query = 1
+        else:at_query = 0
+        dots_query = self.query.find(self.contains_dots) != -1
+        if dots_query == True:dots_query = 1
+        else: dots_query = 0
+        return hyphen_query, at_query, dots_query
 
 
 def get_alexa_rank(url):
@@ -378,38 +407,39 @@ def get_features_domain(_Domain, uni_delta_clt, bi_delta_clt, tri_delta_clt):  #
     num_token_domain, longest_token_domain, ave_token_domain = domain.tokens()
     bigram_domain = domain.bag_of_word(bi_delta_clt, uni_delta_clt, 2)
     trigram_domain = domain.bag_of_word(tri_delta_clt, bi_delta_clt, 3)
-    num_hyphen_domain = domain.num_hyphens()
+    hyphen_domain, num_hyphen, at_domain, dots_domain = domain.domain_characters()
     subdomain = domain.subdomain()
-    return length_domain, num_token_domain, longest_token_domain, ave_token_domain, bigram_domain, \
-           trigram_domain, num_hyphen_domain, subdomain
+    # return length_domain, num_token_domain, longest_token_domain, ave_token_domain, bigram_domain, \
+    #        trigram_domain, subdomain, hyphen_domain, num_hyphen, at_domain, dots_domain
+    return hyphen_domain, at_domain, dots_domain
 
 
 def get_features_path(_Path):  # 解析 Path
     path = Path(_Path)
     if _Path == '':
-        num_token_path, ave_token_path, longest_token_path, digit_letter_ratio_path, has_target_path = 0, 0, 0, 0, 0
+        len_path, num_token_path, ave_token_path, longest_token_path, digit_letter_ratio_path, has_target_path = 0, 0, 0, 0, 0, 0
     else:
-        num_token_path, ave_token_path, longest_token_path = path.tokens()
+        len_path, num_token_path, ave_token_path, longest_token_path = path.tokens()
         # unigram_path = path.bag_of_word(uni_delta_clt, uni_delta_clt, 1)
         # bigram_path = path.bag_of_word(bi_delta_clt, uni_delta_clt, 2)
         # trigram_path = path.bag_of_word(tri_delta_clt, bi_delta_clt, 3)
         # quadgram_path = path.bag_of_word(qua_delta_clt, tri_delta_clt, 4)
         digit_letter_ratio_path = path.digit_letter_ratio()
         has_target_path = path.has_target()
-    return num_token_path, ave_token_path, longest_token_path, \
-           digit_letter_ratio_path, has_target_path  # unigram_path, bigram_path, trigram_path, quadgram_path
+    return len_path, ave_token_path #, num_token_path, ave_token_path, longest_token_path, digit_letter_ratio_path, has_target_path
 
 
 def get_features_query(_Query):  # 解析 Query
     query = Query(_Query)
     if _Query == '':
-        length_query, num_querys, longest_query = 0, 0, 0
+        len_query, num_querys, longest_query, hyphen_query, at_query, dots_query = 0, 0, 0, 0, 0, 0
     else:
-        length_query, num_querys, longest_query = query.self_query()
+        len_query, num_querys, longest_query = query.self_query()
+        hyphen_query, at_query, dots_query = query.query_characters()
         # trigram_query = query.bag_of_word(tri_delta_clt, bi_delta_clt, 3)
         # quadgram_query = query.bag_of_word(qua_delta_clt, tri_delta_clt, 4)
-    return length_query, num_querys, longest_query
-
+    # return len_query, num_querys, longest_query, hyphen_query, at_query, dots_query
+    return hyphen_query, at_query, dots_query
 
 def feature_extract(url, uni_delta_clt, bi_delta_clt, tri_delta_clt):
     print >> sys.stderr, 'Features extraction is starting...'
@@ -423,54 +453,61 @@ def feature_extract(url, uni_delta_clt, bi_delta_clt, tri_delta_clt):
     _url = url.lower()
     _Scheme, _Hostname, _Domain, _Path, _Params, _Query = get_url_parts(_url)
 
-    length_url, num_dots_url, num_slashes_url, is_at_url, is_hyphen_url, is_slash_redir_url, \
-    contains_ip_url, sensitive_term_url, num_non_alpha_url, \
-    longest_token_url, average_token_url, same_target_url = get_features_url(url)
+    # length_url, num_dots_url, num_slashes_url, is_at_url, is_hyphen_url, is_slash_redir_url, \
+    # contains_ip_url, sensitive_term_url, num_non_alpha_url, \
+    # longest_token_url, average_token_url, same_target_url = get_features_url(url)
 
-    t_scheme = get_features_scheme(_Scheme)
+    # t_scheme = get_features_scheme(_Scheme)
 
-    length_domain, num_token_domain, longest_token_domain, ave_token_domain, bigram_domain, trigram_domain, \
-    num_hyphen_domain, subdomain = get_features_domain(_Domain, uni_delta_clt, bi_delta_clt, tri_delta_clt)
+    # length_domain, num_token_domain, longest_token_domain, ave_token_domain, bigram_domain, trigram_domain, \
+    # subdomain, hyphen_domain, num_hyphen_domain, at_domain, dots_domain = get_features_domain(_Domain, uni_delta_clt, bi_delta_clt, tri_delta_clt)
+    hyphen_domain, at_domain, dots_domain = get_features_domain(_Domain, uni_delta_clt, bi_delta_clt, tri_delta_clt)
 
-    num_token_path, ave_token_path, longest_token_path, digit_letter_ratio_path, has_target_path = get_features_path(_Path)
+    # len_path, num_token_path, ave_token_path, longest_token_path, digit_letter_ratio_path, has_target_path = get_features_path(_Path)
+    len_path, ave_token_path = get_features_path(_Path)
 
-    length_query, num_querys, longest_query = get_features_query(_Query)
+    # length_query, num_querys, longest_query, hyphen_query, at_query, dots_query = get_features_query(_Query)
+    hyphen_query, at_query, dots_query = get_features_query(_Query)
 
-    is_time = _whois(url)
-
-    # URL's rank
-    data = get_alexa_rank(url)
-    if data:
-        popularity_rank, reach_rank = data
-    else:
-        popularity_rank, reach_rank = 0, 0
-    gap = max(popularity_rank, reach_rank) - min(popularity_rank, reach_rank)   # 权值转换
-    if popularity_rank != 0 and reach_rank != 0:
-        if gap == 0:rank_value = 100001
-        elif gap < 100000:rank_value = float(100000 / gap)
-        else:rank_value = -1
-    else:rank_value = 0
-
-    # webpage content
-    num_input, is_input_pwd, is_favicon = get_content(url)
+    # is_time = _whois(url)
+    #
+    # # URL's rank
+    # data = get_alexa_rank(url)
+    # if data:
+    #     popularity_rank, reach_rank = data
+    # else:
+    #     popularity_rank, reach_rank = 0, 0
+    # gap = max(popularity_rank, reach_rank) - min(popularity_rank, reach_rank)   # 权值转换
+    # if popularity_rank != 0 and reach_rank != 0:
+    #     if gap == 0:rank_value = 100001
+    #     elif gap < 100000:rank_value = float(100000 / gap)
+    #     else:rank_value = -1
+    # else:rank_value = 0
+    #
+    # # webpage content
+    # num_input, is_input_pwd, is_favicon = get_content(url)
 
     #############################################################################
     #  写入文件
     #############################################################################
-    print '{} {} {} {} {} {} {} {} {} {} {} {} {} {} {} {} {} {}' \
-        ' {} {} {} {} {} {} {} {} {} {} {} {} {} {} {} {} {}'\
-        .format(url, length_url, num_dots_url, num_slashes_url, is_at_url, is_hyphen_url, is_slash_redir_url,
-                    contains_ip_url, sensitive_term_url, num_non_alpha_url,
-                    longest_token_url, average_token_url, same_target_url,
-                    t_scheme,
-                    length_domain, num_token_domain, longest_token_domain, ave_token_domain,
-                    bigram_domain, trigram_domain,
-                    num_hyphen_domain, subdomain,
-                    num_token_path, ave_token_path, longest_token_path,
-                    digit_letter_ratio_path, has_target_path,
-                    length_query, num_querys, longest_query,
-                    is_time, rank_value,
-                    num_input, is_input_pwd, is_favicon)
+    # print '{} {} {} {} {} {} {} {} {} {} {} {} {} {} {} {} {} {}' \
+    #     ' {} {} {} {} {} {} {} {} {} {} {} {} {} {} {} {} {}'\
+    #     .format(url, length_url, num_dots_url, num_slashes_url, is_at_url, is_hyphen_url, is_slash_redir_url,
+    #                 contains_ip_url, sensitive_term_url, num_non_alpha_url,
+    #                 longest_token_url, average_token_url, same_target_url,
+    #                 t_scheme,
+    #                 length_domain, num_token_domain, longest_token_domain, ave_token_domain,
+    #                 bigram_domain, trigram_domain,
+    #                 subdomain,
+    #                 hyphen_domain, num_hyphen_domain, at_domain, dots_domain,
+    #                 len_path, num_token_path, ave_token_path, longest_token_path,
+    #                 digit_letter_ratio_path, has_target_path,
+    #                 length_query, num_querys, longest_query,
+    #                 hyphen_query, at_query, dots_query,
+    #                 is_time, rank_value,
+    #                 num_input, is_input_pwd, is_favicon)
+
+    print '{} {} {} {} {} {} {} {}'.format(hyphen_domain, at_domain, dots_domain, len_path, ave_token_path, hyphen_query, at_query, dots_query)
 
 
 def multi_feature_extract():
@@ -478,9 +515,11 @@ def multi_feature_extract():
     uni_delta_clt, bi_delta_clt, tri_delta_clt = train_n_grams(load_data())
     print >> sys.stderr, 'training has finished!'
     print >> sys.stderr, 'Multi process is starting ...'
-    p = Pool(processes=4)
+    p = Pool(processes=5)
     for url in sys.stdin:
         p.apply_async(feature_extract, args=(url, uni_delta_clt, bi_delta_clt, tri_delta_clt, ))
+    p.close()
+    p.join()
     print >> sys.stderr, 'Done，main thread quit ...'
 
 
